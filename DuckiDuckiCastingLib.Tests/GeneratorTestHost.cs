@@ -1,6 +1,6 @@
 using System.Collections.Immutable;
 using System.Reflection;
-using System.Runtime.InteropServices;
+using System.Reflection.PortableExecutable;
 using System.Runtime.Loader;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
@@ -17,15 +17,33 @@ internal static class GeneratorTestHost
     private static readonly CSharpCompilationOptions CompilationOptions =
         new(OutputKind.DynamicallyLinkedLibrary, nullableContextOptions: NullableContextOptions.Enable);
 
-    private static readonly ImmutableArray<MetadataReference> RuntimeReferences = Directory
-        .GetFiles(RuntimeEnvironment.GetRuntimeDirectory(), "*.dll")
+    // The framework assemblies of the running test host. The trusted platform assembly list contains only
+    // managed assemblies; scanning the runtime directory for *.dll would also pick up native libraries such as
+    // System.IO.Compression.Native.dll on Windows, which fail with CS0009 in every test compilation.
+    private static readonly ImmutableArray<MetadataReference> RuntimeReferences = ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!)
+        .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
         .Where(path =>
         {
             string name = Path.GetFileName(path);
             return name.StartsWith("System", StringComparison.Ordinal) || name is "netstandard.dll" or "mscorlib.dll" or "Microsoft.CSharp.dll";
         })
+        .Where(HasManagedMetadata)
         .Select(path => (MetadataReference)MetadataReference.CreateFromFile(path))
         .ToImmutableArray();
+
+    private static bool HasManagedMetadata(string path)
+    {
+        try
+        {
+            using var stream = File.OpenRead(path);
+            using var reader = new PEReader(stream);
+            return reader.HasMetadata;
+        }
+        catch (BadImageFormatException)
+        {
+            return false;
+        }
+    }
 
     public static IEnumerable<string> CaseNames()
         => Directory.GetDirectories(CasesRoot).Select(dir => Path.GetFileName(dir)).OrderBy(name => name, StringComparer.Ordinal);
@@ -35,6 +53,11 @@ internal static class GeneratorTestHost
         public IEnumerable<Diagnostic> AllDiagnostics => GeneratorDiagnostics.Concat(Output.GetDiagnostics());
 
         public ImmutableArray<GeneratedSourceResult> GeneratedSources => Driver.GetRunResult().Results[0].GeneratedSources;
+
+        /// <summary>Everything at Warning or above, one per line, for assertion messages.</summary>
+        public string Describe() => string.Join(
+            "\n",
+            AllDiagnostics.Where(d => d.Severity >= DiagnosticSeverity.Warning).Select(d => $"  {d.Severity} {d.Id}: {d.GetMessage()}"));
 
         /// <summary>Ids of everything at Warning or above, sorted, for comparison with expected.txt.</summary>
         public List<string> ReportedIds => AllDiagnostics
@@ -162,7 +185,7 @@ internal sealed class TestCase
 
         string libName = Name + ".Lib";
         var lib = GeneratorTestHost.Run(libName, LibFiles);
-        Assert.DoesNotContain(lib.AllDiagnostics, d => d.Severity >= DiagnosticSeverity.Warning);
+        Assert.True(lib.ReportedIds.Count == 0, $"lib/ of case {Name} must compile cleanly but reported:\n{lib.Describe()}");
         byte[] image = GeneratorTestHost.Emit(lib.Output);
         references.Add(MetadataReference.CreateFromImage(image));
         images[libName] = image;

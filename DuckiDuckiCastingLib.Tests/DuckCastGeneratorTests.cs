@@ -27,7 +27,9 @@ public class DuckCastGeneratorTests
 
         var run = GeneratorTestHost.Run(caseName, testCase.MainFiles, references);
 
-        Assert.Equal(testCase.ExpectedIds, run.ReportedIds);
+        Assert.True(
+            testCase.ExpectedIds.SequenceEqual(run.ReportedIds),
+            $"Expected diagnostics [{string.Join(", ", testCase.ExpectedIds)}] but got:\n{run.Describe()}");
 
         if (run.AllDiagnostics.Any(d => d.Severity == DiagnosticSeverity.Error))
         {
