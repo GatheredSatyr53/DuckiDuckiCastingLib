@@ -22,7 +22,7 @@ namespace DuckiDuckiCastingLib
     /// interfaces are not regenerated when unrelated code changes.
     /// </remarks>
     [Generator(LanguageNames.CSharp)]
-    internal sealed class DuckCastGenerator : IIncrementalGenerator
+    public sealed class DuckCastGenerator : IIncrementalGenerator
     {
         public const string ANNOTATIONS = "DuckiDuckiCastingLib.Annotations";
         public const string SupportsDuckCastAttributeName = "SupportsDuckCastAttribute";
@@ -95,7 +95,7 @@ namespace DuckiDuckiCastingLib
     }
 
     /// <summary>Step names for <c>GeneratorDriver</c> tests that assert incremental caching.</summary>
-    internal static class TrackingNames
+    public static class TrackingNames
     {
         public const string Interfaces = "DuckInterfaces";
         public const string CastSites = "DuckCastSites";
