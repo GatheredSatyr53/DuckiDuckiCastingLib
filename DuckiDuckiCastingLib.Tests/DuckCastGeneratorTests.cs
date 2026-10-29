@@ -73,7 +73,7 @@ public class DuckCastGeneratorTests
         var reasons = GeneratorTestHost.StepReasons(driver);
 
         // Three duck interfaces; edit.cs adds a cast to IReader<string> only.
-        Assert.Equal(new[] { IncrementalStepRunReason.Modified, IncrementalStepRunReason.Unchanged, IncrementalStepRunReason.Unchanged },
+        Assert.Equal([IncrementalStepRunReason.Modified, IncrementalStepRunReason.Unchanged, IncrementalStepRunReason.Unchanged],
             reasons[TrackingNames.Units].OrderBy(r => r));
         Assert.Equal(1, reasons["SourceOutput"].Count(r => r == IncrementalStepRunReason.Modified));
         Assert.Equal(2, reasons["SourceOutput"].Count(r => r == IncrementalStepRunReason.Cached));
@@ -89,7 +89,7 @@ public class DuckCastGeneratorTests
         var run = GeneratorTestHost.Run(testCase.Name, testCase.MainFiles);
 
         Assert.Equal(
-            new[] { "Deep.Nest.Holder.IGreeter.DuckCast.g.cs", "Outer_1.Inner.IThing.DuckCast.g.cs", "SupportsDuckCastAttribute.g.cs" },
+            ["Deep.Nest.Holder.IGreeter.DuckCast.g.cs", "Outer_1.Inner.IThing.DuckCast.g.cs", "SupportsDuckCastAttribute.g.cs"],
             run.GeneratedSources.Select(s => s.HintName).OrderBy(n => n, StringComparer.Ordinal));
     }
 }

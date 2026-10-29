@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Reflection;
 using System.Reflection.PortableExecutable;
+using System.Runtime.InteropServices;
 using System.Runtime.Loader;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
@@ -17,19 +18,15 @@ internal static class GeneratorTestHost
     private static readonly CSharpCompilationOptions CompilationOptions =
         new(OutputKind.DynamicallyLinkedLibrary, nullableContextOptions: NullableContextOptions.Enable);
 
-    // The framework assemblies of the running test host. The trusted platform assembly list contains only
-    // managed assemblies; scanning the runtime directory for *.dll would also pick up native libraries such as
-    // System.IO.Compression.Native.dll on Windows, which fail with CS0009 in every test compilation.
-    private static readonly ImmutableArray<MetadataReference> RuntimeReferences = ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!)
-        .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
+    private static readonly ImmutableArray<MetadataReference> RuntimeReferences = [.. Directory
+        .GetFiles(RuntimeEnvironment.GetRuntimeDirectory(), "*.dll")
         .Where(path =>
         {
             string name = Path.GetFileName(path);
             return name.StartsWith("System", StringComparison.Ordinal) || name is "netstandard.dll" or "mscorlib.dll" or "Microsoft.CSharp.dll";
         })
         .Where(HasManagedMetadata)
-        .Select(path => (MetadataReference)MetadataReference.CreateFromFile(path))
-        .ToImmutableArray();
+        .Select(path => (MetadataReference)MetadataReference.CreateFromFile(path))];
 
     private static bool HasManagedMetadata(string path)
     {
@@ -60,11 +57,10 @@ internal static class GeneratorTestHost
             AllDiagnostics.Where(d => d.Severity >= DiagnosticSeverity.Warning).Select(d => $"  {d.Severity} {d.Id}: {d.GetMessage()}"));
 
         /// <summary>Ids of everything at Warning or above, sorted, for comparison with expected.txt.</summary>
-        public List<string> ReportedIds => AllDiagnostics
+        public List<string> ReportedIds => [.. AllDiagnostics
             .Where(d => d.Severity >= DiagnosticSeverity.Warning)
             .Select(d => d.Id)
-            .OrderBy(id => id, StringComparer.Ordinal)
-            .ToList();
+            .OrderBy(id => id, StringComparer.Ordinal)];
     }
 
     public static SyntaxTree Parse(string path)
@@ -82,7 +78,7 @@ internal static class GeneratorTestHost
             CompilationOptions);
 
         GeneratorDriver driver = CSharpGeneratorDriver.Create(
-            generators: new[] { new DuckCastGenerator().AsSourceGenerator() },
+            generators: [new DuckCastGenerator().AsSourceGenerator()],
             parseOptions: ParseOptions,
             driverOptions: new GeneratorDriverOptions(IncrementalGeneratorOutputKind.None, trackIncrementalGeneratorSteps: true));
 
@@ -133,14 +129,10 @@ internal static class GeneratorTestHost
         return reasons;
     }
 
-    private sealed class ImageLoadContext : AssemblyLoadContext
+    private sealed class ImageLoadContext(IReadOnlyDictionary<string, byte[]> dependencies) : AssemblyLoadContext
     {
-        private readonly IReadOnlyDictionary<string, byte[]> _dependencies;
-
-        public ImageLoadContext(IReadOnlyDictionary<string, byte[]> dependencies) => _dependencies = dependencies;
-
         protected override Assembly? Load(AssemblyName name)
-            => name.Name is not null && _dependencies.TryGetValue(name.Name, out byte[]? bytes)
+            => name.Name is not null && dependencies.TryGetValue(name.Name, out byte[]? bytes)
                 ? LoadFromStream(new MemoryStream(bytes))
                 : null;
     }
