@@ -18,6 +18,9 @@ internal static class GeneratorTestHost
     private static readonly CSharpCompilationOptions CompilationOptions =
         new(OutputKind.DynamicallyLinkedLibrary, nullableContextOptions: NullableContextOptions.Enable);
 
+    // Framework assemblies of the running test host. On Windows the runtime directory also holds native
+    // libraries such as System.IO.Compression.Native.dll; HasManagedMetadata drops them, otherwise every
+    // test compilation fails with CS0009.
     private static readonly ImmutableArray<MetadataReference> RuntimeReferences = [.. Directory
         .GetFiles(RuntimeEnvironment.GetRuntimeDirectory(), "*.dll")
         .Where(path =>
