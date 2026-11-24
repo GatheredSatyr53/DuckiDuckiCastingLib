@@ -9,7 +9,7 @@
 ```xml
 <ItemGroup>
   <PackageReference Include="DuckiDuckiCastingLib" Version="0.1.0-ci.RUN_ID.RUN_ATTEMPT" PrivateAssets="all" />
-  <AdditionalFiles Include="PocoJson/Stages/**/*.stage.json" />
+  <AdditionalFiles Include="PocoJson/Stages/**/*.poco.json" />
 </ItemGroup>
 ```
 
@@ -22,7 +22,7 @@
   <ProjectReference Include="../DuckiDuckiCastingLib/DuckiDuckiCastingLib.csproj"
                     OutputItemType="Analyzer"
                     ReferenceOutputAssembly="false" />
-  <AdditionalFiles Include="PocoJson/Stages/**/*.stage.json" />
+  <AdditionalFiles Include="PocoJson/Stages/**/*.poco.json" />
 </ItemGroup>
 ```
 
@@ -36,7 +36,7 @@ public abstract class AutoStage
 }
 ```
 
-В `Stages/ThermalCycleStage.stage.json` находится спецификация для `AutoStage`. Имя прототипа она получает из атрибута.
+В `Stages/ThermalCycleStage.poco.json` находится спецификация для `AutoStage`. Имя прототипа она получает из атрибута. Существующие файлы `*.stage.json` также поддерживаются, если они включены в `AdditionalFiles`.
 
 - `namespace`, `name` и `baseType` обязательны. Для базового класса укажите полное метадатное имя необобщённого абстрактного класса. Сгенерированный класс имеет доступность `public`.
 - `properties` задаёт значения виртуальных или абстрактных свойств только с `get`. `methods` задаёт возвращаемые значения виртуальных или абстрактных методов без параметров, например `"ToString()": "Этап термоцикла"`.

@@ -55,7 +55,8 @@ public sealed class PocoGenerator : IIncrementalGenerator
             """));
 
         var specs = context.AdditionalTextsProvider
-            .Where(file => file.Path.EndsWith(".stage.json", StringComparison.OrdinalIgnoreCase))
+            .Where(file => file.Path.EndsWith(".poco.json", StringComparison.OrdinalIgnoreCase) ||
+                file.Path.EndsWith(".stage.json", StringComparison.OrdinalIgnoreCase))
             .Select((file, token) => (file.Path, Text: file.GetText(token)?.ToString()))
             .Collect();
 

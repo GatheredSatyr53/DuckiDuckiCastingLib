@@ -13,6 +13,6 @@
 						  ReferenceOutputAssembly="false" />
 	</ItemGroup>
   <ItemGroup>
-    <AdditionalFiles Include="PocoJson/Stages/**/*.stage.json" />
+    <AdditionalFiles Include="PocoJson/Stages/**/*.poco.json" />
   </ItemGroup>
 </Project>
