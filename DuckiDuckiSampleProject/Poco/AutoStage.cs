@@ -48,8 +48,3 @@ public partial class ManualStage
 {
     public override string ToString() => "Ручная реализация";
 }
-
-public abstract class LegacyStage
-{
-    public abstract string Caption { get; }
-}

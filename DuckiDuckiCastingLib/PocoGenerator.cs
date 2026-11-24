@@ -2,11 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
-using System.Runtime.Serialization.Json;
 using System.Text;
 using System.Text.RegularExpressions;
-using System.Xml;
-using System.Xml.Linq;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.Text;
@@ -26,7 +23,7 @@ public sealed class PocoGenerator : IIncrementalGenerator
 
     #pragma warning disable RS2008 // Analyzer release tracking is not used by this project.
     private static readonly DiagnosticDescriptor InvalidSpec = new(
-        "POCO001", "Invalid POCO specification", "{0}", "PocoJson",
+        "POCO001", "Invalid POCO specification", "{0}", "Poco",
         DiagnosticSeverity.Error, isEnabledByDefault: true);
     #pragma warning restore RS2008
 
@@ -82,21 +79,15 @@ public sealed class PocoGenerator : IIncrementalGenerator
             }
             """));
 
-        var specs = context.AdditionalTextsProvider
-            .Where(file => file.Path.EndsWith(".poco.json", StringComparison.OrdinalIgnoreCase) ||
-                file.Path.EndsWith(".stage.json", StringComparison.OrdinalIgnoreCase))
-            .Select((file, token) => (file.Path, Text: file.GetText(token)?.ToString()))
-            .Collect();
-
         var families = context.SyntaxProvider.ForAttributeWithMetadataName(
             FamilyAttributeName,
             static (node, _) => node is EnumDeclarationSyntax,
             static (attribute, _) => ((INamedTypeSymbol)attribute.TargetSymbol, attribute.Attributes[0]))
             .Collect();
 
-        context.RegisterSourceOutput(context.CompilationProvider.Combine(specs).Combine(families), (output, input) =>
+        context.RegisterSourceOutput(context.CompilationProvider.Combine(families), (output, input) =>
         {
-            var compilation = (CSharpCompilation)input.Left.Left;
+            var compilation = (CSharpCompilation)input.Left;
             var drafts = new List<(Location Location, string Name, string Source, SyntaxTree Tree)>();
             var names = new HashSet<string>(StringComparer.Ordinal);
             var parseOptions = compilation.SyntaxTrees.FirstOrDefault()?.Options as CSharpParseOptions
@@ -110,24 +101,6 @@ public sealed class PocoGenerator : IIncrementalGenerator
                 var tree = CSharpSyntaxTree.ParseText(draft.Source, parseOptions, draft.Name + ".g.cs",
                     cancellationToken: output.CancellationToken);
                 drafts.Add((location, draft.Name, draft.Source, tree));
-            }
-
-            foreach (var spec in input.Left.Right.OrderBy(spec => spec.Path, StringComparer.Ordinal))
-            {
-                output.CancellationToken.ThrowIfCancellationRequested();
-                var start = new LinePosition(0, 0);
-                var location = Location.Create(spec.Path, new TextSpan(0, 0), new LinePositionSpan(start, start));
-                try
-                {
-                    var bytes = Encoding.UTF8.GetBytes(spec.Text ?? throw new SpecException("Cannot read file."));
-                    using var reader = JsonReaderWriterFactory.CreateJsonReader(bytes, new XmlDictionaryReaderQuotas());
-                    var root = XDocument.Load(reader, LoadOptions.PreserveWhitespace).Root ?? throw new SpecException("Missing JSON root.");
-                    AddDraft(GenerateDraft(compilation, root), location);
-                }
-                catch (Exception error) when (error is XmlException or SpecException)
-                {
-                    Report(output, location, error.Message);
-                }
             }
 
             foreach (var (family, attribute) in input.Right)
@@ -179,26 +152,10 @@ public sealed class PocoGenerator : IIncrementalGenerator
     private static void Report(SourceProductionContext output, Location location, string message) =>
         output.ReportDiagnostic(Diagnostic.Create(InvalidSpec, location, message));
 
-    private static (string Name, string Source) GenerateDraft(CSharpCompilation compilation, XElement root)
-    {
-        var spec = Object(root, "specification");
-        foreach (var key in spec.Keys)
-        {
-            if (key is not ("namespace" or "name" or "baseType" or "prototype" or "properties" or "methods" or "variables"))
-                throw new SpecException($"Unknown field '{key}'.");
-        }
-
-        var ns = RequiredString(spec, "namespace");
-        var name = RequiredString(spec, "name");
-        var baseType = ResolveType(compilation, RequiredString(spec, "baseType"));
-        return GenerateDraft(compilation, ns, name, baseType, FindPrototype(compilation, baseType, spec),
-            OptionalObject(spec, "variables"), OptionalObject(spec, "properties"), OptionalObject(spec, "methods"));
-    }
-
     private static (string Name, string Source) GenerateFamilyDraft(CSharpCompilation compilation, string ns,
         IFieldSymbol field, INamedTypeSymbol baseType)
     {
-        var variables = new Dictionary<string, XElement>(StringComparer.Ordinal);
+        var variables = new Dictionary<string, ScalarValue>(StringComparer.Ordinal);
         foreach (var attribute in field.GetAttributes().Where(attribute =>
             attribute.AttributeClass?.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat) == ValueAttributeName))
         {
@@ -211,8 +168,8 @@ public sealed class PocoGenerator : IIncrementalGenerator
             variables.Add(key, AttributeValue(args[1], key));
         }
 
-        var properties = new Dictionary<string, XElement>(StringComparer.Ordinal);
-        var methods = new Dictionary<string, XElement>(StringComparer.Ordinal);
+        var properties = new Dictionary<string, ScalarValue>(StringComparer.Ordinal);
+        var methods = new Dictionary<string, ScalarValue>(StringComparer.Ordinal);
         var seen = new HashSet<string>(StringComparer.Ordinal);
         for (var type = baseType; type is not null; type = type.BaseType)
         {
@@ -242,11 +199,11 @@ public sealed class PocoGenerator : IIncrementalGenerator
             }
         }
 
-        var prototype = FindPrototype(compilation, baseType);
+        var prototype = FindPrototype(baseType);
         return GenerateDraft(compilation, ns, field.Name, baseType, prototype, variables, properties, methods);
     }
 
-    private static XElement AttributeValue(TypedConstant argument, string key)
+    private static ScalarValue AttributeValue(TypedConstant argument, string key)
     {
         if (argument.Kind is TypedConstantKind.Error or TypedConstantKind.Array)
             throw new SpecException($"Cannot resolve PocoValue for '{key}'.");
@@ -261,22 +218,22 @@ public sealed class PocoGenerator : IIncrementalGenerator
 
         var (kind, text) = value switch
         {
-            null => ("null", ""),
-            string str => ("string", str),
-            char character => ("string", character.ToString()),
-            bool boolean => ("boolean", boolean ? "true" : "false"),
-            float number => ("number", number.ToString("R", CultureInfo.InvariantCulture)),
-            double number => ("number", number.ToString("R", CultureInfo.InvariantCulture)),
+            null => (ScalarKind.Null, ""),
+            string str => (ScalarKind.String, str),
+            char character => (ScalarKind.String, character.ToString()),
+            bool boolean => (ScalarKind.Boolean, boolean ? "true" : "false"),
+            float number => (ScalarKind.Number, number.ToString("R", CultureInfo.InvariantCulture)),
+            double number => (ScalarKind.Number, number.ToString("R", CultureInfo.InvariantCulture)),
             byte or sbyte or short or ushort or int or uint or long or ulong =>
-                ("number", Convert.ToString(value, CultureInfo.InvariantCulture)!),
+                (ScalarKind.Number, Convert.ToString(value, CultureInfo.InvariantCulture)!),
             _ => throw new SpecException($"PocoValue for '{key}' must be a scalar constant.")
         };
-        return new XElement("value", new XAttribute("type", kind), text);
+        return new ScalarValue(kind, text);
     }
 
     private static (string Name, string Source) GenerateDraft(CSharpCompilation compilation,
         string ns, string name, INamedTypeSymbol baseType, INamedTypeSymbol? prototype,
-        Dictionary<string, XElement> variables, Dictionary<string, XElement> properties, Dictionary<string, XElement> methods)
+        Dictionary<string, ScalarValue> variables, Dictionary<string, ScalarValue> properties, Dictionary<string, ScalarValue> methods)
     {
         if (!Identifier(name) || (ns.Length != 0 && !ns.Split('.').All(Identifier)))
             throw new SpecException("Invalid class or namespace name.");
@@ -287,12 +244,6 @@ public sealed class PocoGenerator : IIncrementalGenerator
             throw new SpecException("'baseType' must name a different non-generic abstract class.");
 
         var existing = compilation.Assembly.GetTypeByMetadataName(fullName);
-        foreach (var variable in variables)
-        {
-            if (JsonKind(variable.Value) is not ("string" or "number" or "boolean" or "null"))
-                throw new SpecException($"Prototype variable '{variable.Key}' must be a scalar JSON value.");
-        }
-
         var source = new StringBuilder();
         source.AppendLine("// <auto-generated/>");
         source.AppendLine("#nullable enable");
@@ -356,14 +307,10 @@ public sealed class PocoGenerator : IIncrementalGenerator
         SyntaxFacts.IsValidIdentifier(value) && SyntaxFacts.GetKeywordKind(value) == SyntaxKind.None &&
         !value.StartsWith("@", StringComparison.Ordinal);
 
-    private static INamedTypeSymbol ResolveType(Compilation compilation, string name) =>
-        compilation.GetTypeByMetadataName(name) ?? throw new SpecException($"Unknown or ambiguous type '{name}'.");
-
     private static bool IsPrototypeAttribute(AttributeData attribute) =>
         attribute.AttributeClass?.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat) == PrototypeAttributeName;
 
-    private static INamedTypeSymbol? FindPrototype(Compilation compilation, INamedTypeSymbol baseType,
-        Dictionary<string, XElement>? spec = null)
+    private static INamedTypeSymbol? FindPrototype(INamedTypeSymbol baseType)
     {
         var attribute = baseType.GetAttributes().FirstOrDefault(IsPrototypeAttribute);
         if (attribute is not null)
@@ -375,9 +322,7 @@ public sealed class PocoGenerator : IIncrementalGenerator
             throw new SpecException($"PocoPrototype on '{baseType.ToDisplayString()}' must reference a class.");
         }
 
-        return spec is not null && spec.TryGetValue("prototype", out var prototypeName)
-            ? ResolveType(compilation, StringValue(prototypeName, "prototype"))
-            : null;
+        return null;
     }
 
     private static ISymbol? FindMember(INamedTypeSymbol baseType, string name, bool method)
@@ -405,7 +350,7 @@ public sealed class PocoGenerator : IIncrementalGenerator
     }
 
     private static void AppendPrototypeConstant(StringBuilder source, IFieldSymbol field,
-        INamedTypeSymbol? existing, Dictionary<string, XElement> variables)
+        INamedTypeSymbol? existing, Dictionary<string, ScalarValue> variables)
     {
         var binding = field.GetAttributes().FirstOrDefault(attribute =>
             attribute.AttributeClass?.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat) == VariableAttributeName);
@@ -450,7 +395,7 @@ public sealed class PocoGenerator : IIncrementalGenerator
             .Append(" @").Append(field.Name).Append(" = ").Append(literal).AppendLine(";");
     }
 
-    private static string RenderConstant(IFieldSymbol field, Dictionary<string, XElement> variables)
+    private static string RenderConstant(IFieldSymbol field, Dictionary<string, ScalarValue> variables)
     {
         var literal = field.ConstantValue switch
         {
@@ -476,7 +421,7 @@ public sealed class PocoGenerator : IIncrementalGenerator
     }
 
     private static void AppendMember(StringBuilder source, ISymbol member, string signature, ITypeSymbol type,
-        XElement value, Compilation compilation)
+        ScalarValue value, Compilation compilation)
     {
         var accessibility = member.DeclaredAccessibility switch
         {
@@ -495,33 +440,33 @@ public sealed class PocoGenerator : IIncrementalGenerator
             .Append(' ').Append(signature).Append(" => ").Append(literal).AppendLine(";");
     }
 
-    private static string RenderValue(XElement value, ITypeSymbol type, string signature)
+    private static string RenderValue(ScalarValue value, ITypeSymbol type, string signature)
     {
         var nullableValue = type is INamedTypeSymbol named &&
             named.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T;
-        if (JsonKind(value) == "null" && (type.IsReferenceType || nullableValue))
+        if (value.Kind == ScalarKind.Null && (type.IsReferenceType || nullableValue))
             return "null";
 
         if (nullableValue)
             type = ((INamedTypeSymbol)type).TypeArguments[0];
-        if (type.TypeKind == TypeKind.Enum && JsonKind(value) == "string")
+        if (type.TypeKind == TypeKind.Enum && value.Kind == ScalarKind.String)
         {
             var field = type.GetMembers(value.Value).OfType<IFieldSymbol>().FirstOrDefault(item => item.HasConstantValue);
             if (field is not null)
                 return type.ToDisplayString(TypeFormat) + ".@" + field.Name;
         }
 
-        switch (type.SpecialType, JsonKind(value))
+        switch (type.SpecialType, value.Kind)
         {
-            case (SpecialType.System_String, "string"):
+            case (SpecialType.System_String, ScalarKind.String):
                 return SymbolDisplay.FormatLiteral(value.Value, quote: true);
-            case (SpecialType.System_Char, "string") when value.Value.Length == 1:
+            case (SpecialType.System_Char, ScalarKind.String) when value.Value.Length == 1:
                 return SymbolDisplay.FormatLiteral(value.Value[0], quote: true);
-            case (SpecialType.System_Boolean, "boolean"):
+            case (SpecialType.System_Boolean, ScalarKind.Boolean):
                 return value.Value;
         }
 
-        if (JsonKind(value) == "number")
+        if (value.Kind == ScalarKind.Number)
         {
             var number = type.SpecialType switch
             {
@@ -548,7 +493,7 @@ public sealed class PocoGenerator : IIncrementalGenerator
         throw new SpecException($"Value for '{signature}' is incompatible with '{type.ToDisplayString()}'.");
     }
 
-    private static string RenderAttribute(AttributeData attribute, Dictionary<string, XElement> variables)
+    private static string RenderAttribute(AttributeData attribute, Dictionary<string, ScalarValue> variables)
     {
         var type = attribute.AttributeClass ?? throw new SpecException("Cannot resolve a prototype attribute.");
         var args = attribute.ConstructorArguments.Select(value => RenderAttributeValue(value, variables))
@@ -556,7 +501,7 @@ public sealed class PocoGenerator : IIncrementalGenerator
         return "[" + type.ToDisplayString(TypeFormat) + "(" + string.Join(", ", args) + ")]";
     }
 
-    private static string RenderAttributeValue(TypedConstant value, Dictionary<string, XElement> variables)
+    private static string RenderAttributeValue(TypedConstant value, Dictionary<string, ScalarValue> variables)
     {
         if (value.Type is null || value.Kind == TypedConstantKind.Error)
             throw new SpecException("Cannot resolve a prototype attribute argument.");
@@ -580,53 +525,25 @@ public sealed class PocoGenerator : IIncrementalGenerator
         return "(" + type + ")(" + SymbolDisplay.FormatPrimitive(value.Value, quoteStrings: true, useHexadecimalNumbers: false) + ")";
     }
 
-    private static XElement RequiredVariable(Dictionary<string, XElement> variables, string key) =>
+    private static ScalarValue RequiredVariable(Dictionary<string, ScalarValue> variables, string key) =>
         variables.TryGetValue(key, out var value) ? value : throw new SpecException($"Missing prototype variable '{key}'.");
 
-    private static string RenderTemplate(string template, Dictionary<string, XElement> variables)
+    private static string RenderTemplate(string template, Dictionary<string, ScalarValue> variables)
     {
         var expanded = Placeholder.Replace(template, match =>
         {
             var key = match.Groups["key"].Value;
             var value = RequiredVariable(variables, key);
-            if (JsonKind(value) != "string")
+            if (value.Kind != ScalarKind.String)
                 throw new SpecException($"Prototype variable '{key}' must be a string for template substitution.");
             return value.Value;
         });
         return SymbolDisplay.FormatLiteral(expanded, quote: true);
     }
 
-    private static string? JsonKind(XElement value) => (string?)value.Attribute("type");
+    private enum ScalarKind { Null, String, Boolean, Number }
 
-    private static Dictionary<string, XElement> Object(XElement value, string field)
-    {
-        if (JsonKind(value) != "object")
-            throw new SpecException($"'{field}' must be an object.");
-
-        var result = new Dictionary<string, XElement>(StringComparer.Ordinal);
-        foreach (var property in value.Elements())
-        {
-            // The framework reader stores keys that cannot be XML names in the item attribute.
-            var name = (string?)property.Attribute("item") ?? property.Name.LocalName;
-            if (result.ContainsKey(name))
-                throw new SpecException($"Duplicate field '{name}' in '{field}'.");
-
-            result.Add(name, property);
-        }
-
-        return result;
-    }
-
-    private static Dictionary<string, XElement> OptionalObject(Dictionary<string, XElement> spec, string key) =>
-        spec.TryGetValue(key, out var value) ? Object(value, key) : new(StringComparer.Ordinal);
-
-    private static string RequiredString(Dictionary<string, XElement> spec, string key) =>
-        spec.TryGetValue(key, out var value) ? StringValue(value, key)
-            : throw new SpecException($"Missing field '{key}'.");
-
-    private static string StringValue(XElement value, string key) =>
-        JsonKind(value) == "string" ? value.Value
-            : throw new SpecException($"'{key}' must be a string.");
+    private readonly record struct ScalarValue(ScalarKind Kind, string Value);
 
     private sealed class SpecException : Exception
     {

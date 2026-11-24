@@ -19,8 +19,7 @@ internal static class PocoExample
         if (!typeof(IncompleteStage).IsAbstract || new ManualStage().ToString() != "Ручная реализация")
             throw new InvalidOperationException("Unexpected partial class behavior.");
 
-        if (typeof(ManualStage).GetCustomAttribute<FastJsonContractAttribute>(inherit: false)?.Name != "manual" ||
-            typeof(LegacyJsonStage).GetCustomAttribute<FastJsonContractAttribute>(inherit: false)?.Name != "legacy_json")
+        if (typeof(ManualStage).GetCustomAttribute<FastJsonContractAttribute>(inherit: false)?.Name != "manual")
         {
             throw new InvalidOperationException("Unexpected prototype selection.");
         }

@@ -1,8 +1,0 @@
-{
-  "namespace": "TTS.Controllers.Auto",
-  "name": "LegacyJsonStage",
-  "baseType": "TTS.Controllers.Auto.LegacyStage",
-  "prototype": "TTS.Controllers.Auto.AutoStageProto",
-  "properties": { "Caption": "LegacyJsonStage" },
-  "variables": { "stage_contract": "legacy_json", "retry_limit": 3, "enabled": true, "stage_mode": "Extended" }
-}
