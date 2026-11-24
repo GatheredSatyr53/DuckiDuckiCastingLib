@@ -4,6 +4,17 @@
 
 ## Подключение
 
+Скачайте архив `DuckiDuckiCastingLib-nuget` из GitHub Actions, распакуйте его и добавьте папку с `.nupkg` как локальный источник NuGet. Подключите пакет `DuckiDuckiCastingLib` с версией из имени файла. Для пакета нужен компилятор Roslyn 4.14 или новее, например из .NET SDK 10.
+
+```xml
+<ItemGroup>
+  <PackageReference Include="DuckiDuckiCastingLib" Version="0.1.0-ci.RUN_ID.RUN_ATTEMPT" PrivateAssets="all" />
+  <AdditionalFiles Include="PocoJson/Stages/**/*.stage.json" />
+</ItemGroup>
+```
+
+Если вы подключаете генераторы из исходников, используйте ссылку на проект анализатора.
+
 Добавьте в проект, в котором должны появиться наследники, ссылку на генератор и файлы спецификаций.
 
 ```xml

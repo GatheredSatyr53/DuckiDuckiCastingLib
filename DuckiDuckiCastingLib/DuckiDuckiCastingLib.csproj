@@ -5,6 +5,15 @@
 	<Nullable>enable</Nullable>
 	<EnforceExtendedAnalyzerRules>true</EnforceExtendedAnalyzerRules>
 	<LangVersion>11</LangVersion>
+    <PackageId>DuckiDuckiCastingLib</PackageId>
+    <VersionPrefix>0.1.0</VersionPrefix>
+    <Description>Roslyn source generators for duck typing and JSON-driven POCO classes.</Description>
+    <RepositoryUrl>https://github.com/GatheredSatyr53/DuckiDuckiCastingLib</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+    <SuppressDependenciesWhenPacking>true</SuppressDependenciesWhenPacking>
+    <TargetsForTfmSpecificContentInPackage>$(TargetsForTfmSpecificContentInPackage);IncludeAnalyzerInPackage</TargetsForTfmSpecificContentInPackage>
   </PropertyGroup>
 
   <ItemGroup>
@@ -14,6 +23,13 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="DuckiDuckiCastingLib.Tests" />
+    <None Include="../DuckiDuckiSampleProject/PocoJson/README.md" Pack="true" PackagePath="/" />
   </ItemGroup>
+
+  <Target Name="IncludeAnalyzerInPackage">
+    <ItemGroup>
+      <TfmSpecificPackageFile Include="$(TargetPath)" PackagePath="analyzers/dotnet/cs/" />
+    </ItemGroup>
+  </Target>
 
 </Project>

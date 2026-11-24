@@ -38,3 +38,17 @@ jobs:
           name: DuckiDuckiCastingLib-analyzer
           path: DuckiDuckiCastingLib/bin/Release/netstandard2.0/DuckiDuckiCastingLib.dll
           if-no-files-found: error
+
+      - name: Pack analyzer
+        run: >
+          dotnet pack DuckiDuckiCastingLib/DuckiDuckiCastingLib.csproj
+          --configuration Release --no-build --no-restore
+          --version-suffix "ci.${{ github.run_id }}.${{ github.run_attempt }}"
+          --output artifacts/nuget
+
+      - name: Upload NuGet package
+        uses: actions/upload-artifact@v4
+        with:
+          name: DuckiDuckiCastingLib-nuget
+          path: artifacts/nuget/*.nupkg
+          if-no-files-found: error
