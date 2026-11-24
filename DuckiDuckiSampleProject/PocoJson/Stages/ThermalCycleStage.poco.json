@@ -4,5 +4,5 @@
   "baseType": "TTS.Controllers.Auto.AutoStage",
   "properties": { "Caption": "Термоцикл" },
   "methods": { "ToString()": "Этап термоцикла" },
-  "variables": { "stage_contract": "thermal_cycle" }
+  "variables": { "stage_contract": "thermal_cycle", "retry_limit": 3, "enabled": true, "stage_mode": "Extended" }
 }

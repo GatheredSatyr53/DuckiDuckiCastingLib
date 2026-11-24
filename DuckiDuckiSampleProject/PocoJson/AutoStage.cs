@@ -19,7 +19,26 @@ public abstract class AutoStage
 }
 
 [FastJsonContract("$stage_contract")]
-public sealed class AutoStageProto;
+public sealed class AutoStageProto
+{
+    public const string Contract = "$stage_contract";
+    public const decimal DefaultScale = 1.25m;
+
+    [PocoVariable("retry_limit")]
+    public const int RetryLimit = 0;
+
+    [PocoVariable("enabled")]
+    public const bool Enabled = false;
+
+    [PocoVariable("stage_mode")]
+    public const StageMode Mode = StageMode.Standard;
+}
+
+public enum StageMode
+{
+    Standard,
+    Extended
+}
 
 public sealed class AutoStageParameters;
 

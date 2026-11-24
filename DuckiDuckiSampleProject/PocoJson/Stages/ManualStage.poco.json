@@ -4,5 +4,5 @@
   "baseType": "TTS.Controllers.Auto.AutoStage",
   "prototype": "TTS.Controllers.Auto.IgnoredPrototype",
   "properties": { "Caption": "ManualStage" },
-  "variables": { "stage_contract": "manual" }
+  "variables": { "stage_contract": "manual", "retry_limit": 3, "enabled": true, "stage_mode": "Extended" }
 }

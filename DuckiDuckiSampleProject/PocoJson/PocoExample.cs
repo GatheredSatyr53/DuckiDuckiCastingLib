@@ -25,6 +25,20 @@ internal static class PocoExample
             throw new InvalidOperationException("Unexpected prototype selection.");
         }
 
+        var constants = new
+        {
+            ThermalCycleStage.Contract,
+            ThermalCycleStage.DefaultScale,
+            ThermalCycleStage.RetryLimit,
+            ThermalCycleStage.Enabled,
+            ThermalCycleStage.Mode
+        };
+        if (constants.Contract != "thermal_cycle" || constants.DefaultScale != 1.25m ||
+            constants.RetryLimit != 3 || !constants.Enabled || constants.Mode != StageMode.Extended)
+        {
+            throw new InvalidOperationException("Unexpected prototype constants.");
+        }
+
         Console.WriteLine("OK");
     }
 }
