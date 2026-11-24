@@ -1,0 +1,8 @@
+{
+  "namespace": "TTS.Controllers.Auto",
+  "name": "ManualStage",
+  "baseType": "TTS.Controllers.Auto.AutoStage",
+  "prototype": "TTS.Controllers.Auto.IgnoredPrototype",
+  "properties": { "Caption": "ManualStage" },
+  "variables": { "stage_contract": "manual" }
+}

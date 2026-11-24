@@ -1,0 +1,7 @@
+{
+  "namespace": "TTS.Controllers.Auto",
+  "name": "IncompleteStage",
+  "baseType": "TTS.Controllers.Auto.AutoStage",
+  "properties": { "Caption": "IncompleteStage" },
+  "variables": { "stage_contract": "incomplete" }
+}
