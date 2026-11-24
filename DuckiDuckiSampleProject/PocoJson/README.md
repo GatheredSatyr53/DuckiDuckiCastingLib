@@ -1,6 +1,6 @@
 # Генерация POCO из JSON
 
-Генерация POCO входит в генератор Roslyn `DuckiDuckiCastingLib`.
+За генерацию POCO отвечает `PocoGenerator`. Roslyn загружает его и `DuckCastGenerator` из одной сборки анализатора `DuckiDuckiCastingLib`.
 
 ## Подключение
 

@@ -89,12 +89,7 @@ public class DuckCastGeneratorTests
         var run = GeneratorTestHost.Run(testCase.Name, testCase.MainFiles);
 
         Assert.Equal(
-            [
-                "Deep.Nest.Holder.IGreeter.DuckCast.g.cs",
-                "Outer_1.Inner.IThing.DuckCast.g.cs",
-                "PocoPrototypeAttribute.g.cs",
-                "SupportsDuckCastAttribute.g.cs"
-            ],
+            ["Deep.Nest.Holder.IGreeter.DuckCast.g.cs", "Outer_1.Inner.IThing.DuckCast.g.cs", "SupportsDuckCastAttribute.g.cs"],
             run.GeneratedSources.Select(s => s.HintName).OrderBy(n => n, StringComparer.Ordinal));
     }
 }
