@@ -1,5 +1,5 @@
 using System.ComponentModel;
-using PocoJson;
+using DuckiDuckiCastingLib.Annotations;
 using TTS.Standard.Json;
 
 namespace TTS.Controllers.Auto;

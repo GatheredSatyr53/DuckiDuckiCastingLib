@@ -1,6 +1,6 @@
 # Генерация POCO из JSON
 
-`PocoJson.Generator` — инкрементальный генератор Roslyn. Для его загрузки нужен компилятор, работающий на .NET 10, например компилятор из .NET SDK 10. Используйте `dotnet build`. Генератор не добавляет зависимостей в приложение. Целевая платформа самого приложения задаётся в его проекте.
+Генерация POCO входит в генератор Roslyn `DuckiDuckiCastingLib`.
 
 ## Подключение
 
@@ -8,24 +8,24 @@
 
 ```xml
 <ItemGroup>
-  <ProjectReference Include="../PocoJson.Generator/PocoJson.Generator.csproj"
+  <ProjectReference Include="../DuckiDuckiCastingLib/DuckiDuckiCastingLib.csproj"
                     OutputItemType="Analyzer"
                     ReferenceOutputAssembly="false" />
-  <AdditionalFiles Include="Stages/**/*.stage.json" />
+  <AdditionalFiles Include="PocoJson/Stages/**/*.stage.json" />
 </ItemGroup>
 ```
 
 Укажите тип прототипа атрибутом на базовом классе. Объявление атрибута добавляет генератор.
 
 ```csharp
-[PocoJson.PocoPrototype(typeof(AutoStageProto))]
+[DuckiDuckiCastingLib.Annotations.PocoPrototype(typeof(AutoStageProto))]
 public abstract class AutoStage
 {
     // Члены базового класса.
 }
 ```
 
-В `Example/Stages/ThermalCycleStage.stage.json` находится спецификация для `AutoStage`. Имя прототипа она получает из атрибута.
+В `Stages/ThermalCycleStage.stage.json` находится спецификация для `AutoStage`. Имя прототипа она получает из атрибута.
 
 - `namespace`, `name` и `baseType` обязательны. Для базового класса укажите полное метадатное имя необобщённого абстрактного класса. Сгенерированный класс имеет доступность `public`.
 - `properties` задаёт значения виртуальных или абстрактных свойств только с `get`. `methods` задаёт возвращаемые значения виртуальных или абстрактных методов без параметров, например `"ToString()": "Этап термоцикла"`.
@@ -37,7 +37,7 @@ public abstract class AutoStage
 ## Запуск примера
 
 ```sh
-dotnet run --project Example/Example.csproj
+dotnet run --project DuckiDuckiSampleProject
 ```
 
 Пример проверяет свойства, методы, подстановку контракта, неполную спецификацию и ручной `partial`. Атрибуты fastJSON в примере имитируют интерфейс атрибутов TTS. Полиморфную сериализацию и десериализацию нужно проверять в проекте TTS с реальным `FastJsonHelper.CreatePolymorphicParameters`.

@@ -12,4 +12,7 @@
 						  OutputItemType="Analyzer"
 						  ReferenceOutputAssembly="false" />
 	</ItemGroup>
+  <ItemGroup>
+    <AdditionalFiles Include="PocoJson/Stages/**/*.stage.json" />
+  </ItemGroup>
 </Project>

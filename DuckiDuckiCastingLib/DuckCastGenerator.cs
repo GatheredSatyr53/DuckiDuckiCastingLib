@@ -53,6 +53,8 @@ namespace DuckiDuckiCastingLib
                     """);
             });
 
+            PocoGeneration.Register(context);
+
             // Stage 1: every interface carrying [SupportsDuckCast].
             IncrementalValuesProvider<InterfaceModel> interfaces = context.SyntaxProvider
                 .ForAttributeWithMetadataName(

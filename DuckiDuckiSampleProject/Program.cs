@@ -22,6 +22,7 @@ namespace DuckiDuckiSampleProject
         {
             IWorker worker = IWorker.Cast(new Imposter());
             worker.DoWork();
+            PocoExample.Run();
         }
     }
 }
