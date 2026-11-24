@@ -11,10 +11,12 @@ public abstract class AutoStage
 {
     [Browsable(false)]
     [FastJsonIgnore]
+    [PocoVariable("caption")]
     public abstract string Caption { get; }
 
     public virtual AutoStageParameters? CreateParameters() => null;
 
+    [PocoVariable("label")]
     public abstract override string ToString();
 }
 

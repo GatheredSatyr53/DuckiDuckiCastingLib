@@ -10,6 +10,7 @@ using System.Xml.Linq;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.Text;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 
 namespace DuckiDuckiCastingLib;
 
@@ -19,6 +20,8 @@ public sealed class PocoGenerator : IIncrementalGenerator
     private const string AnnotationsNamespace = "DuckiDuckiCastingLib.Annotations";
     private const string PrototypeAttributeName = "global::" + AnnotationsNamespace + ".PocoPrototypeAttribute";
 
+    private const string FamilyAttributeName = AnnotationsNamespace + ".PocoFamilyAttribute";
+    private const string ValueAttributeName = "global::" + AnnotationsNamespace + ".PocoValueAttribute";
     private const string VariableAttributeName = "global::" + AnnotationsNamespace + ".PocoVariableAttribute";
 
     #pragma warning disable RS2008 // Analyzer release tracking is not used by this project.
@@ -54,7 +57,7 @@ public sealed class PocoGenerator : IIncrementalGenerator
                     public global::System.Type PrototypeType { get; }
                 }
 
-                [global::System.AttributeUsage(global::System.AttributeTargets.Field, Inherited = false)]
+                [global::System.AttributeUsage(global::System.AttributeTargets.Field | global::System.AttributeTargets.Property | global::System.AttributeTargets.Method, Inherited = false)]
                 internal sealed class PocoVariableAttribute : global::System.Attribute
                 {
                     public PocoVariableAttribute(string name)
@@ -63,6 +66,18 @@ public sealed class PocoGenerator : IIncrementalGenerator
                     }
 
                     public string Name { get; }
+                }
+
+                [global::System.AttributeUsage(global::System.AttributeTargets.Enum)]
+                internal sealed class PocoFamilyAttribute : global::System.Attribute
+                {
+                    public PocoFamilyAttribute(global::System.Type baseType) { }
+                }
+
+                [global::System.AttributeUsage(global::System.AttributeTargets.Field, AllowMultiple = true)]
+                internal sealed class PocoValueAttribute : global::System.Attribute
+                {
+                    public PocoValueAttribute(string name, object value) { }
                 }
             }
             """));
@@ -73,33 +88,69 @@ public sealed class PocoGenerator : IIncrementalGenerator
             .Select((file, token) => (file.Path, Text: file.GetText(token)?.ToString()))
             .Collect();
 
-        context.RegisterSourceOutput(context.CompilationProvider.Combine(specs), (output, input) =>
+        var families = context.SyntaxProvider.ForAttributeWithMetadataName(
+            FamilyAttributeName,
+            static (node, _) => node is EnumDeclarationSyntax,
+            static (attribute, _) => ((INamedTypeSymbol)attribute.TargetSymbol, attribute.Attributes[0]))
+            .Collect();
+
+        context.RegisterSourceOutput(context.CompilationProvider.Combine(specs).Combine(families), (output, input) =>
         {
-            var compilation = (CSharpCompilation)input.Left;
-            var drafts = new List<(string Path, string Name, string Source, SyntaxTree Tree)>();
+            var compilation = (CSharpCompilation)input.Left.Left;
+            var drafts = new List<(Location Location, string Name, string Source, SyntaxTree Tree)>();
             var names = new HashSet<string>(StringComparer.Ordinal);
             var parseOptions = compilation.SyntaxTrees.FirstOrDefault()?.Options as CSharpParseOptions
                 ?? CSharpParseOptions.Default;
 
-            foreach (var spec in input.Right.OrderBy(spec => spec.Path, StringComparer.Ordinal))
+            void AddDraft((string Name, string Source) draft, Location location)
+            {
+                if (!names.Add(draft.Name))
+                    throw new SpecException($"Type '{draft.Name}' has multiple specifications.");
+
+                var tree = CSharpSyntaxTree.ParseText(draft.Source, parseOptions, draft.Name + ".g.cs",
+                    cancellationToken: output.CancellationToken);
+                drafts.Add((location, draft.Name, draft.Source, tree));
+            }
+
+            foreach (var spec in input.Left.Right.OrderBy(spec => spec.Path, StringComparer.Ordinal))
             {
                 output.CancellationToken.ThrowIfCancellationRequested();
+                var start = new LinePosition(0, 0);
+                var location = Location.Create(spec.Path, new TextSpan(0, 0), new LinePositionSpan(start, start));
                 try
                 {
                     var bytes = Encoding.UTF8.GetBytes(spec.Text ?? throw new SpecException("Cannot read file."));
                     using var reader = JsonReaderWriterFactory.CreateJsonReader(bytes, new XmlDictionaryReaderQuotas());
                     var root = XDocument.Load(reader, LoadOptions.PreserveWhitespace).Root ?? throw new SpecException("Missing JSON root.");
-                    var (name, source) = GenerateDraft(compilation, root);
-                    if (!names.Add(name))
-                        throw new SpecException($"Type '{name}' has multiple specifications.");
-
-                    var tree = CSharpSyntaxTree.ParseText(source, parseOptions, spec.Path + ".g.cs",
-                        cancellationToken: output.CancellationToken);
-                    drafts.Add((spec.Path, name, source, tree));
+                    AddDraft(GenerateDraft(compilation, root), location);
                 }
                 catch (Exception error) when (error is XmlException or SpecException)
                 {
-                    Report(output, spec.Path, error.Message);
+                    Report(output, location, error.Message);
+                }
+            }
+
+            foreach (var (family, attribute) in input.Right)
+            {
+                if (attribute.ConstructorArguments.Length != 1 ||
+                    attribute.ConstructorArguments[0].Value is not INamedTypeSymbol baseType)
+                {
+                    Report(output, family.Locations[0], "PocoFamily must specify a base class.");
+                    continue;
+                }
+
+                foreach (var field in family.GetMembers().OfType<IFieldSymbol>().Where(field => field.HasConstantValue))
+                {
+                    output.CancellationToken.ThrowIfCancellationRequested();
+                    try
+                    {
+                        var ns = family.ContainingNamespace.IsGlobalNamespace ? "" : family.ContainingNamespace.ToDisplayString();
+                        AddDraft(GenerateFamilyDraft(compilation, ns, field, baseType), field.Locations[0]);
+                    }
+                    catch (SpecException error)
+                    {
+                        Report(output, field.Locations[0], error.Message);
+                    }
                 }
             }
 
@@ -113,7 +164,7 @@ public sealed class PocoGenerator : IIncrementalGenerator
                     .ToArray();
                 var otherErrors = errors.Where(diagnostic => diagnostic.Id != "CS0534").ToArray();
                 foreach (var error in otherErrors)
-                    Report(output, draft.Path, error.GetMessage());
+                    Report(output, draft.Location, error.GetMessage());
                 if (otherErrors.Length != 0)
                     continue;
 
@@ -125,12 +176,8 @@ public sealed class PocoGenerator : IIncrementalGenerator
         });
     }
 
-    private static void Report(SourceProductionContext output, string path, string message)
-    {
-        var position = new LinePosition(0, 0);
-        var location = Location.Create(path, new TextSpan(0, 0), new LinePositionSpan(position, position));
+    private static void Report(SourceProductionContext output, Location location, string message) =>
         output.ReportDiagnostic(Diagnostic.Create(InvalidSpec, location, message));
-    }
 
     private static (string Name, string Source) GenerateDraft(CSharpCompilation compilation, XElement root)
     {
@@ -143,17 +190,103 @@ public sealed class PocoGenerator : IIncrementalGenerator
 
         var ns = RequiredString(spec, "namespace");
         var name = RequiredString(spec, "name");
-        if (!Identifier(name) || !ns.Split('.').All(Identifier))
+        var baseType = ResolveType(compilation, RequiredString(spec, "baseType"));
+        return GenerateDraft(compilation, ns, name, baseType, FindPrototype(compilation, baseType, spec),
+            OptionalObject(spec, "variables"), OptionalObject(spec, "properties"), OptionalObject(spec, "methods"));
+    }
+
+    private static (string Name, string Source) GenerateFamilyDraft(CSharpCompilation compilation, string ns,
+        IFieldSymbol field, INamedTypeSymbol baseType)
+    {
+        var variables = new Dictionary<string, XElement>(StringComparer.Ordinal);
+        foreach (var attribute in field.GetAttributes().Where(attribute =>
+            attribute.AttributeClass?.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat) == ValueAttributeName))
+        {
+            var args = attribute.ConstructorArguments;
+            if (args.Length != 2 || args[0].Value is not string key || string.IsNullOrWhiteSpace(key))
+                throw new SpecException("PocoValue must specify a variable name and value.");
+            if (variables.ContainsKey(key))
+                throw new SpecException($"Prototype variable '{key}' is assigned more than once.");
+
+            variables.Add(key, AttributeValue(args[1], key));
+        }
+
+        var properties = new Dictionary<string, XElement>(StringComparer.Ordinal);
+        var methods = new Dictionary<string, XElement>(StringComparer.Ordinal);
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        for (var type = baseType; type is not null; type = type.BaseType)
+        {
+            foreach (var member in type.GetMembers())
+            {
+                if (member.IsStatic || member.DeclaredAccessibility == Accessibility.Private)
+                    continue;
+                var signature = member switch
+                {
+                    IPropertySymbol { IsIndexer: false } => member.Name,
+                    IMethodSymbol { MethodKind: MethodKind.Ordinary, Arity: 0, Parameters.Length: 0 } => member.Name + "()",
+                    _ => null
+                };
+                if (signature is null || !seen.Add(signature))
+                    continue;
+
+                var binding = member.GetAttributes().FirstOrDefault(attribute =>
+                    attribute.AttributeClass?.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat) == VariableAttributeName);
+                if (binding is null)
+                    continue;
+                if (binding.ConstructorArguments.Length != 1 ||
+                    binding.ConstructorArguments[0].Value is not string key || string.IsNullOrWhiteSpace(key))
+                    throw new SpecException($"PocoVariable on '{signature}' must specify a variable name.");
+
+                if (variables.TryGetValue(key, out var value))
+                    (member is IPropertySymbol ? properties : methods).Add(signature, value);
+            }
+        }
+
+        var prototype = FindPrototype(compilation, baseType);
+        return GenerateDraft(compilation, ns, field.Name, baseType, prototype, variables, properties, methods);
+    }
+
+    private static XElement AttributeValue(TypedConstant argument, string key)
+    {
+        if (argument.Kind is TypedConstantKind.Error or TypedConstantKind.Array)
+            throw new SpecException($"Cannot resolve PocoValue for '{key}'.");
+
+        var value = argument.Value;
+        if (argument.Kind == TypedConstantKind.Enum && argument.Type is INamedTypeSymbol enumType)
+        {
+            value = enumType.GetMembers().OfType<IFieldSymbol>()
+                .FirstOrDefault(field => field.HasConstantValue && Equals(field.ConstantValue, value))?.Name
+                ?? throw new SpecException($"PocoValue for '{key}' must name a declared enum value.");
+        }
+
+        var (kind, text) = value switch
+        {
+            null => ("null", ""),
+            string str => ("string", str),
+            char character => ("string", character.ToString()),
+            bool boolean => ("boolean", boolean ? "true" : "false"),
+            float number => ("number", number.ToString("R", CultureInfo.InvariantCulture)),
+            double number => ("number", number.ToString("R", CultureInfo.InvariantCulture)),
+            byte or sbyte or short or ushort or int or uint or long or ulong =>
+                ("number", Convert.ToString(value, CultureInfo.InvariantCulture)!),
+            _ => throw new SpecException($"PocoValue for '{key}' must be a scalar constant.")
+        };
+        return new XElement("value", new XAttribute("type", kind), text);
+    }
+
+    private static (string Name, string Source) GenerateDraft(CSharpCompilation compilation,
+        string ns, string name, INamedTypeSymbol baseType, INamedTypeSymbol? prototype,
+        Dictionary<string, XElement> variables, Dictionary<string, XElement> properties, Dictionary<string, XElement> methods)
+    {
+        if (!Identifier(name) || (ns.Length != 0 && !ns.Split('.').All(Identifier)))
             throw new SpecException("Invalid class or namespace name.");
 
-        var fullName = ns + "." + name;
-        var baseType = ResolveType(compilation, RequiredString(spec, "baseType"));
+        var fullName = ns.Length == 0 ? name : ns + "." + name;
         if (baseType.TypeKind != TypeKind.Class || !baseType.IsAbstract || baseType.IsStatic ||
             baseType.IsGenericType || baseType.ToDisplayString() == fullName)
             throw new SpecException("'baseType' must name a different non-generic abstract class.");
 
         var existing = compilation.Assembly.GetTypeByMetadataName(fullName);
-        var variables = OptionalObject(spec, "variables");
         foreach (var variable in variables)
         {
             if (JsonKind(variable.Value) is not ("string" or "number" or "boolean" or "null"))
@@ -163,9 +296,11 @@ public sealed class PocoGenerator : IIncrementalGenerator
         var source = new StringBuilder();
         source.AppendLine("// <auto-generated/>");
         source.AppendLine("#nullable enable");
-        source.Append("namespace ").AppendLine(ns);
-        source.AppendLine("{");
-        var prototype = FindPrototype(compilation, baseType, spec);
+        if (ns.Length != 0)
+        {
+            source.Append("namespace ").AppendLine(ns);
+            source.AppendLine("{");
+        }
         if (prototype is not null)
         {
             foreach (var attribute in prototype.GetAttributes().Where(attribute => !IsPrototypeAttribute(attribute)))
@@ -181,7 +316,7 @@ public sealed class PocoGenerator : IIncrementalGenerator
                 AppendPrototypeConstant(source, field, existing, variables);
         }
 
-        foreach (var entry in OptionalObject(spec, "properties"))
+        foreach (var entry in properties)
         {
             var key = entry.Key;
             var value = entry.Value;
@@ -194,7 +329,7 @@ public sealed class PocoGenerator : IIncrementalGenerator
             AppendMember(source, property, key, property.Type, value, compilation);
         }
 
-        foreach (var entry in OptionalObject(spec, "methods"))
+        foreach (var entry in methods)
         {
             var key = entry.Key;
             var value = entry.Value;
@@ -212,7 +347,8 @@ public sealed class PocoGenerator : IIncrementalGenerator
         }
 
         source.AppendLine("    }");
-        source.AppendLine("}");
+        if (ns.Length != 0)
+            source.AppendLine("}");
         return (fullName, source.ToString());
     }
 
@@ -227,7 +363,7 @@ public sealed class PocoGenerator : IIncrementalGenerator
         attribute.AttributeClass?.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat) == PrototypeAttributeName;
 
     private static INamedTypeSymbol? FindPrototype(Compilation compilation, INamedTypeSymbol baseType,
-        Dictionary<string, XElement> spec)
+        Dictionary<string, XElement>? spec = null)
     {
         var attribute = baseType.GetAttributes().FirstOrDefault(IsPrototypeAttribute);
         if (attribute is not null)
@@ -239,7 +375,7 @@ public sealed class PocoGenerator : IIncrementalGenerator
             throw new SpecException($"PocoPrototype on '{baseType.ToDisplayString()}' must reference a class.");
         }
 
-        return spec.TryGetValue("prototype", out var prototypeName)
+        return spec is not null && spec.TryGetValue("prototype", out var prototypeName)
             ? ResolveType(compilation, StringValue(prototypeName, "prototype"))
             : null;
     }
