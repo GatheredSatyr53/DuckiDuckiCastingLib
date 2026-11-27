@@ -204,6 +204,7 @@ public sealed class PocoGenerator : IIncrementalGenerator
 
         var properties = new Dictionary<string, ScalarValue>(StringComparer.Ordinal);
         var methods = new Dictionary<string, ScalarValue>(StringComparer.Ordinal);
+        var knownVariables = new HashSet<string>(StringComparer.Ordinal);
         var seen = new HashSet<string>(StringComparer.Ordinal);
         for (var type = baseType; type is not null; type = type.BaseType)
         {
@@ -220,20 +221,30 @@ public sealed class PocoGenerator : IIncrementalGenerator
                 if (signature is null || !seen.Add(signature))
                     continue;
 
-                var binding = member.GetAttributes().FirstOrDefault(attribute =>
-                    attribute.AttributeClass?.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat) == VariableAttributeName);
-                if (binding is null)
+                var key = VariableBinding(member, signature);
+                if (key is null)
                     continue;
-                if (binding.ConstructorArguments.Length != 1 ||
-                    binding.ConstructorArguments[0].Value is not string key || string.IsNullOrWhiteSpace(key))
-                    throw new SpecException($"PocoVariable on '{signature}' must specify a variable name.");
 
+                knownVariables.Add(key);
                 if (variables.TryGetValue(key, out var value))
                     (member is IPropertySymbol ? properties : methods).Add(signature, value);
             }
         }
 
         var prototype = FindPrototype(baseType);
+        foreach (var property in InterfaceTypes(interfaces).SelectMany(type => type.GetMembers().OfType<IPropertySymbol>()))
+        {
+            if (VariableBinding(property, property.Name) is { } key)
+                knownVariables.Add(key);
+        }
+
+        if (prototype is not null)
+            CollectPrototypeVariables(prototype, knownVariables);
+
+        var unknown = variables.Keys.Where(key => !knownVariables.Contains(key)).OrderBy(key => key, StringComparer.Ordinal).ToArray();
+        if (unknown.Length != 0)
+            throw new SpecException("Unknown PocoValue variable names: " + string.Join(", ", unknown.Select(key => $"'{key}'")) + ".");
+
         return GenerateDraft(compilation, ns, field.Name, baseType, baseSyntax, interfaces, prototype,
             variables, properties, methods);
     }
@@ -299,29 +310,77 @@ public sealed class PocoGenerator : IIncrementalGenerator
         return interfaces;
     }
 
+    private static IEnumerable<INamedTypeSymbol> InterfaceTypes(IReadOnlyList<INamedTypeSymbol> interfaces) =>
+        interfaces.SelectMany(type => new[] { type }.Concat(type.AllInterfaces));
+
+    private static string? VariableBinding(ISymbol member, string name)
+    {
+        var binding = member.GetAttributes().FirstOrDefault(attribute =>
+            attribute.AttributeClass?.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat) == VariableAttributeName);
+        if (binding is null)
+            return null;
+        if (binding.ConstructorArguments.Length != 1 ||
+            binding.ConstructorArguments[0].Value is not string key || string.IsNullOrWhiteSpace(key))
+            throw new SpecException($"PocoVariable on '{name}' must specify a variable name.");
+
+        return key;
+    }
+
+    private static void CollectPrototypeVariables(INamedTypeSymbol prototype, HashSet<string> knownVariables)
+    {
+        void CollectTemplate(string template)
+        {
+            foreach (Match match in Placeholder.Matches(template))
+                knownVariables.Add(match.Groups["key"].Value);
+        }
+
+        void CollectArgument(TypedConstant argument)
+        {
+            if (argument.IsNull)
+                return;
+            if (argument.Kind == TypedConstantKind.Array)
+            {
+                foreach (var item in argument.Values)
+                    CollectArgument(item);
+            }
+            else if (argument.Value is string template)
+                CollectTemplate(template);
+        }
+
+        foreach (var attribute in prototype.GetAttributes().Where(attribute => !IsPrototypeAttribute(attribute)))
+        {
+            foreach (var argument in attribute.ConstructorArguments.Concat(attribute.NamedArguments.Select(pair => pair.Value)))
+                CollectArgument(argument);
+        }
+
+        foreach (var field in prototype.GetMembers().OfType<IFieldSymbol>().Where(field => field.IsConst))
+        {
+            if (VariableBinding(field, field.Name) is { } key)
+                knownVariables.Add(key);
+            else if (field.ConstantValue is string template)
+                CollectTemplate(template);
+        }
+    }
+
     private static void AppendStaticProperties(StringBuilder source, IReadOnlyList<INamedTypeSymbol> interfaces,
         INamedTypeSymbol? existing, Dictionary<string, ScalarValue> variables)
     {
         var emitted = new Dictionary<string, (ITypeSymbol Type, string Literal)>(StringComparer.Ordinal);
         var visited = new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
-        foreach (var type in interfaces.SelectMany(contract => new[] { contract }.Concat(contract.AllInterfaces)))
+        foreach (var type in InterfaceTypes(interfaces))
         {
             if (!visited.Add(type))
                 continue;
 
             foreach (var property in type.GetMembers().OfType<IPropertySymbol>())
             {
-                var binding = property.GetAttributes().FirstOrDefault(attribute =>
-                    attribute.AttributeClass?.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat) == VariableAttributeName);
-                if (binding is null)
+                var key = VariableBinding(property, property.Name);
+                if (key is null)
                     continue;
                 if (!property.IsStatic || !property.IsAbstract || property.GetMethod is null ||
                     property.SetMethod is not null || property.ReturnsByRef || property.ReturnsByRefReadonly)
                     throw new SpecException($"PocoVariable on interface property '{property.Name}' requires a static abstract get-only property.");
 
-                if (binding.ConstructorArguments.Length != 1 ||
-                    binding.ConstructorArguments[0].Value is not string key || string.IsNullOrWhiteSpace(key))
-                    throw new SpecException($"PocoVariable on '{property.Name}' must specify a variable name.");
                 if (!variables.ContainsKey(key) && existing?.GetMembers(property.Name).Length > 0)
                     continue;
 
@@ -493,11 +552,10 @@ public sealed class PocoGenerator : IIncrementalGenerator
     private static void AppendPrototypeConstant(StringBuilder source, IFieldSymbol field,
         INamedTypeSymbol? existing, Dictionary<string, ScalarValue> variables)
     {
-        var binding = field.GetAttributes().FirstOrDefault(attribute =>
-            attribute.AttributeClass?.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat) == VariableAttributeName);
+        var key = VariableBinding(field, field.Name);
         if (!field.IsConst)
         {
-            if (binding is not null)
+            if (key is not null)
                 throw new SpecException($"PocoVariable on '{field.Name}' requires a const field.");
             return;
         }
@@ -508,12 +566,8 @@ public sealed class PocoGenerator : IIncrementalGenerator
             throw new SpecException($"Cannot resolve the value of prototype constant '{field.Name}'.");
 
         string literal;
-        if (binding is not null)
+        if (key is not null)
         {
-            if (binding.ConstructorArguments.Length != 1 ||
-                binding.ConstructorArguments[0].Value is not string key || string.IsNullOrWhiteSpace(key))
-                throw new SpecException($"PocoVariable on '{field.Name}' must specify a variable name.");
-
             literal = RenderValue(RequiredVariable(variables, key), field.Type,
                 $"{field.Name} (variables.{key})");
         }
