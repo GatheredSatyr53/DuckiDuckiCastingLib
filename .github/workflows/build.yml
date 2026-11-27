@@ -1,0 +1,54 @@
+name: Build analyzer
+
+on:
+  push:
+    branches:
+      - '**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore
+        run: dotnet restore DuckiDuckiCastingLib.sln
+
+      - name: Build Release
+        run: dotnet build DuckiDuckiCastingLib.sln --configuration Release --no-restore
+
+      - name: Run tests
+        run: dotnet test DuckiDuckiCastingLib.sln --configuration Release --no-build --no-restore
+
+      - name: Run sample with both generators
+        run: dotnet run --project DuckiDuckiSampleProject --configuration Release --no-build --no-restore
+
+      - name: Upload analyzer DLL
+        uses: actions/upload-artifact@v4
+        with:
+          name: DuckiDuckiCastingLib-analyzer
+          path: DuckiDuckiCastingLib/bin/Release/netstandard2.0/DuckiDuckiCastingLib.dll
+          if-no-files-found: error
+
+      - name: Pack analyzer
+        run: >
+          dotnet pack DuckiDuckiCastingLib/DuckiDuckiCastingLib.csproj
+          --configuration Release --no-build --no-restore
+          --version-suffix "ci.${{ github.run_id }}.${{ github.run_attempt }}"
+          --output artifacts/nuget
+
+      - name: Upload NuGet package
+        uses: actions/upload-artifact@v4
+        with:
+          name: DuckiDuckiCastingLib-nuget
+          path: artifacts/nuget/*.nupkg
+          if-no-files-found: error
