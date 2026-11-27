@@ -55,6 +55,40 @@ public abstract class MyStage
 используемые прототипом, обязательны. В `AutoStageFamily.cs` есть пример для свойств,
 методов и прототипа. Ошибки значений выдаются как `POCO001` на элементе перечисления.
 
+## Generic-база и статические свойства интерфейса
+
+Если наследник передаёт себя первым параметром в generic-базу, задайте эту
+базу на элементе перечисления. Генератор автоматически подставит имя класса
+первым аргументом, а остальные типы возьмёт из `PocoBase`. Выбранная база
+должна наследовать базовый класс семейства.
+
+```csharp
+[PocoFamily(typeof(AutoStage), Interface = typeof(IAutoStage), Sealed = true)]
+internal enum MeasurementStages
+{
+    [PocoBase(typeof(AutoStage<,>), typeof(PkiMeasurementStageParameters))]
+    [PocoValue("caption", "Съём данных с ПКИ")]
+    [PocoValue("label", "Съём данных с ПКИ")]
+    [PocoValue("contract", "pki_measurement_stage")]
+    PkiMeasurementStage
+}
+
+public interface IAutoStage
+{
+    [PocoVariable("caption")]
+    static abstract string StageCaption { get; }
+}
+```
+
+В `Interface` укажите интерфейс с привязанными статическими абстрактными
+свойствами только для чтения. Члены интерфейса можно также реализовать в
+ручной части класса. `Sealed = true` добавляет `sealed` конкретным классам
+семейства. Для статических абстрактных членов интерфейса нужен C# 11 и
+целевая платформа с их поддержкой, например .NET 7 или новее.
+
+В `GenericStageFamily.cs` показаны все четыре этапа, оба варианта generic-базы
+и перенос контракта через `PocoPrototype`.
+
 ## Константы прототипа
 
 Генератор переносит поля `const`, объявленные в прототипе, сохраняя имя, тип и доступность.
