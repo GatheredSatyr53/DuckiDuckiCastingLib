@@ -19,6 +19,12 @@ public interface IAutoStage
     static abstract string StageCaption { get; }
 }
 
+public interface IStageContract
+{
+    [PocoVariable("contract")]
+    static abstract string ContractName { get; }
+}
+
 public abstract class AutoStage<TStage> : AutoStage
     where TStage : AutoStage<TStage>, IAutoStage
 {
@@ -39,7 +45,9 @@ public sealed class CombustionStageParameters : AutoStageParameters;
 [FastJsonContract("$contract")]
 internal sealed class StageContract;
 
-[PocoFamily(typeof(AutoStage), Interface = typeof(IAutoStage), Sealed = true)]
+[PocoFamily(typeof(AutoStage), Sealed = true)]
+[PocoInterface(typeof(IAutoStage))]
+[PocoInterface(typeof(IStageContract))]
 internal enum StageFamily
 {
     [PocoBase(typeof(AutoStage<>))]
@@ -80,11 +88,12 @@ internal static class GenericStageExample
     }
 
     private static void Check<T>(T stage, string caption, string label, string contract, Type? parameterType)
-        where T : AutoStage, IAutoStage
+        where T : AutoStage, IAutoStage, IStageContract
     {
         var type = typeof(T);
         var attribute = (FastJsonContractAttribute?)Attribute.GetCustomAttribute(type, typeof(FastJsonContractAttribute));
-        if (!type.IsSealed || stage.Caption != caption || T.StageCaption != caption || stage.ToString() != label ||
+        if (!type.IsSealed || stage.Caption != caption || T.StageCaption != caption || T.ContractName != contract ||
+            stage.ToString() != label ||
             stage.CreateParameters()?.GetType() != parameterType || attribute?.Name != contract)
             throw new InvalidOperationException($"Unexpected generated behavior for {type.Name}.");
     }

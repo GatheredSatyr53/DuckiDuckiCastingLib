@@ -63,7 +63,8 @@ public abstract class MyStage
 должна наследовать базовый класс семейства.
 
 ```csharp
-[PocoFamily(typeof(AutoStage), Interface = typeof(IAutoStage), Sealed = true)]
+[PocoFamily(typeof(AutoStage), Sealed = true)]
+[PocoInterface(typeof(IAutoStage))]
 internal enum MeasurementStages
 {
     [PocoBase(typeof(AutoStage<,>), typeof(PkiMeasurementStageParameters))]
@@ -80,8 +81,9 @@ public interface IAutoStage
 }
 ```
 
-В `Interface` укажите интерфейс с привязанными статическими абстрактными
-свойствами только для чтения. Члены интерфейса можно также реализовать в
+Добавьте отдельный `[PocoInterface(typeof(...))]` для каждого интерфейса семейства.
+Для генерации статического абстрактного свойства только для чтения пометьте
+его атрибутом `PocoVariable` в интерфейсе. Члены интерфейса можно также реализовать в
 ручной части класса. `Sealed = true` добавляет `sealed` конкретным классам
 семейства. Для статических абстрактных членов интерфейса нужен C# 11 и
 целевая платформа с их поддержкой, например .NET 7 или новее.

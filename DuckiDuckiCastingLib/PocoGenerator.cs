@@ -18,6 +18,7 @@ public sealed class PocoGenerator : IIncrementalGenerator
     private const string PrototypeAttributeName = "global::" + AnnotationsNamespace + ".PocoPrototypeAttribute";
 
     private const string FamilyAttributeName = AnnotationsNamespace + ".PocoFamilyAttribute";
+    private const string InterfaceAttributeName = "global::" + AnnotationsNamespace + ".PocoInterfaceAttribute";
     private const string BaseAttributeName = "global::" + AnnotationsNamespace + ".PocoBaseAttribute";
     private const string ValueAttributeName = "global::" + AnnotationsNamespace + ".PocoValueAttribute";
     private const string VariableAttributeName = "global::" + AnnotationsNamespace + ".PocoVariableAttribute";
@@ -71,8 +72,13 @@ public sealed class PocoGenerator : IIncrementalGenerator
                 internal sealed class PocoFamilyAttribute : global::System.Attribute
                 {
                     public PocoFamilyAttribute(global::System.Type baseType) { }
-                    public global::System.Type? Interface { get; set; }
                     public bool Sealed { get; set; }
+                }
+
+                [global::System.AttributeUsage(global::System.AttributeTargets.Enum, AllowMultiple = true)]
+                internal sealed class PocoInterfaceAttribute : global::System.Attribute
+                {
+                    public PocoInterfaceAttribute(global::System.Type interfaceType) { }
                 }
 
                 [global::System.AttributeUsage(global::System.AttributeTargets.Field)]
@@ -122,7 +128,17 @@ public sealed class PocoGenerator : IIncrementalGenerator
                     continue;
                 }
 
-                var contract = attribute.NamedArguments.FirstOrDefault(pair => pair.Key == "Interface").Value;
+                IReadOnlyList<INamedTypeSymbol> interfaces;
+                try
+                {
+                    interfaces = ReadInterfaces(family);
+                }
+                catch (SpecException error)
+                {
+                    Report(output, family.Locations[0], error.Message);
+                    continue;
+                }
+
                 var seal = attribute.NamedArguments.Any(pair => pair.Key == "Sealed" && pair.Value.Value is true);
                 foreach (var field in family.GetMembers().OfType<IFieldSymbol>().Where(field => field.HasConstantValue))
                 {
@@ -130,7 +146,7 @@ public sealed class PocoGenerator : IIncrementalGenerator
                     try
                     {
                         var ns = family.ContainingNamespace.IsGlobalNamespace ? "" : family.ContainingNamespace.ToDisplayString();
-                        AddDraft(GenerateFamilyDraft(compilation, ns, field, baseType, contract.Value as INamedTypeSymbol),
+                        AddDraft(GenerateFamilyDraft(compilation, ns, field, baseType, interfaces),
                             field.Locations[0], seal);
                     }
                     catch (SpecException error)
@@ -168,7 +184,7 @@ public sealed class PocoGenerator : IIncrementalGenerator
         output.ReportDiagnostic(Diagnostic.Create(InvalidSpec, location, message));
 
     private static (string Name, string Source) GenerateFamilyDraft(CSharpCompilation compilation, string ns,
-        IFieldSymbol field, INamedTypeSymbol familyBase, INamedTypeSymbol? contract)
+        IFieldSymbol field, INamedTypeSymbol familyBase, IReadOnlyList<INamedTypeSymbol> interfaces)
     {
         var fullName = ns.Length == 0 ? field.Name : ns + "." + field.Name;
         var self = compilation.Assembly.GetTypeByMetadataName(fullName);
@@ -218,7 +234,7 @@ public sealed class PocoGenerator : IIncrementalGenerator
         }
 
         var prototype = FindPrototype(baseType);
-        return GenerateDraft(compilation, ns, field.Name, baseType, baseSyntax, contract, prototype,
+        return GenerateDraft(compilation, ns, field.Name, baseType, baseSyntax, interfaces, prototype,
             variables, properties, methods);
     }
 
@@ -264,12 +280,35 @@ public sealed class PocoGenerator : IIncrementalGenerator
             yield return type;
     }
 
-    private static void AppendStaticProperties(StringBuilder source, INamedTypeSymbol contract,
+    private static IReadOnlyList<INamedTypeSymbol> ReadInterfaces(INamedTypeSymbol family)
+    {
+        var interfaces = new List<INamedTypeSymbol>();
+        var seen = new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
+        foreach (var attribute in family.GetAttributes())
+        {
+            if (attribute.AttributeClass?.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat) != InterfaceAttributeName)
+                continue;
+            if (attribute.ConstructorArguments.Length != 1 ||
+                attribute.ConstructorArguments[0].Value is not INamedTypeSymbol
+                    { TypeKind: TypeKind.Interface, IsUnboundGenericType: false } type)
+                throw new SpecException("PocoInterface must name a closed interface.");
+            if (seen.Add(type))
+                interfaces.Add(type);
+        }
+
+        return interfaces;
+    }
+
+    private static void AppendStaticProperties(StringBuilder source, IReadOnlyList<INamedTypeSymbol> interfaces,
         INamedTypeSymbol? existing, Dictionary<string, ScalarValue> variables)
     {
-        var emitted = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var type in new[] { contract }.Concat(contract.AllInterfaces))
+        var emitted = new Dictionary<string, (ITypeSymbol Type, string Literal)>(StringComparer.Ordinal);
+        var visited = new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
+        foreach (var type in interfaces.SelectMany(contract => new[] { contract }.Concat(contract.AllInterfaces)))
         {
+            if (!visited.Add(type))
+                continue;
+
             foreach (var property in type.GetMembers().OfType<IPropertySymbol>())
             {
                 var binding = property.GetAttributes().FirstOrDefault(attribute =>
@@ -287,8 +326,14 @@ public sealed class PocoGenerator : IIncrementalGenerator
                     continue;
 
                 var literal = RenderValue(RequiredVariable(variables, key), property.Type, property.Name);
-                if (!emitted.Add(property.Name))
-                    throw new SpecException($"Static property '{property.Name}' has multiple bindings.");
+                if (emitted.TryGetValue(property.Name, out var prior))
+                {
+                    if (!SymbolEqualityComparer.Default.Equals(prior.Type, property.Type) || prior.Literal != literal)
+                        throw new SpecException($"Static property '{property.Name}' has conflicting bindings.");
+                    continue;
+                }
+
+                emitted.Add(property.Name, (property.Type, literal));
                 source.Append("        public static ").Append(property.Type.ToDisplayString(TypeFormat))
                     .Append(" @").Append(property.Name).Append(" => ").Append(literal).AppendLine(";");
             }
@@ -324,7 +369,7 @@ public sealed class PocoGenerator : IIncrementalGenerator
     }
 
     private static (string Name, string Source) GenerateDraft(CSharpCompilation compilation,
-        string ns, string name, INamedTypeSymbol baseType, string baseSyntax, INamedTypeSymbol? contract, INamedTypeSymbol? prototype,
+        string ns, string name, INamedTypeSymbol baseType, string baseSyntax, IReadOnlyList<INamedTypeSymbol> interfaces, INamedTypeSymbol? prototype,
         Dictionary<string, ScalarValue> variables, Dictionary<string, ScalarValue> properties, Dictionary<string, ScalarValue> methods)
     {
         if (!Identifier(name) || (ns.Length != 0 && !ns.Split('.').All(Identifier)))
@@ -351,16 +396,12 @@ public sealed class PocoGenerator : IIncrementalGenerator
         }
 
         source.Append("    public partial class ").Append(name).Append(" : ").Append(baseSyntax);
-        if (contract is not null)
-        {
-            if (contract.TypeKind != TypeKind.Interface || contract.IsUnboundGenericType)
-                throw new SpecException("PocoFamily.Interface must name a closed interface.");
-            source.Append(", ").Append(contract.ToDisplayString(TypeFormat));
-        }
+        foreach (var type in interfaces)
+            source.Append(", ").Append(type.ToDisplayString(TypeFormat));
+
         source.AppendLine();
         source.AppendLine("    {");
-        if (contract is not null)
-            AppendStaticProperties(source, contract, existing, variables);
+        AppendStaticProperties(source, interfaces, existing, variables);
         if (prototype is not null)
         {
             foreach (var field in prototype.GetMembers().OfType<IFieldSymbol>())
